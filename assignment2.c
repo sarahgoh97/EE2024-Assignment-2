@@ -322,56 +322,92 @@ void initAll(void) {
 	light_setRange(LIGHT_RANGE_4000);
 }
 
+void stationaryMode(void) {
+    led7seg_setChar('F', 0);
+    oled_putString(0, 0, stationaryOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+    if (enterStationary == 1) {
+        oled_clearScreen();
+    	UART_Send(LPC_UART3, (uint8_t *) stationaryUART, strlen(stationaryUART), BLOCKING);
+    	enterStationary = 0;
+    	enterLaunch = 1;
+    	enterReturn = 1;
+    }
+    temp();
+    if (sw3 == 1 && startRed == 0) {
+        toggleSta();
+        launch = 1;
+    }
+    int btn2 = (GPIO_ReadValue(1) >> 31) & 0x01;
+	if (btn2 == 0) {
+	    clear();
+	}
+}
+
+void launchMode(void) {
+    oled_putString(0, 0, launchOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	if (enterLaunch == 1) {
+	    oled_clearScreen();
+		UART_Send(LPC_UART3, (uint8_t *) launchUART, strlen(launchUART), BLOCKING);
+		enterStationary = 1;
+		enterReturn = 1;
+		enterLaunch = 0;
+		launchTicks = getTicks();
+		sendUART();
+	}
+	if (getTicks() - launchTicks >= (uint32_t) 10000) {
+		launchTicks = getTicks();
+		sendUART();
+	}
+    if (sw3 == 1) {
+        toggleLau();
+        launch = 0;
+        returning = 1;
+    }
+    int btn2 = (GPIO_ReadValue(1) >> 31) & 0x01;
+    if (btn2 == 0) {
+        clear();
+    }
+    temp();
+    acc();
+}
+
+void returnMode(void) {
+    oled_putString(0, 0, returningOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	clear();
+	if (enterReturn == 1) {
+		UART_Send(LPC_UART3, (uint8_t *) returningUART,	strlen(returningUART), BLOCKING);
+		enterStationary = 1;
+		enterLaunch = 1;
+		enterReturn = 0;
+	}
+    if (sw3 == 1) {
+        toggleSta();
+        returning = 0;
+    }
+    int btn2 = (GPIO_ReadValue(1) >> 31) & 0x01;
+    if (btn2 == 0) {
+        clear();
+    }
+    light();
+}
+
 int main(void) {
 	initAll();
 
-	uint32_t previousTicks = 0;
-	uint32_t previousTicks2 = 0;
-	uint32_t curr = 0;
-	uint32_t launchTicks = 0;
-	uint32_t lightTicks = 0;
-	int counter = 0;
-	rgb_setLeds(0);
-
-	char stationaryOLED[] = "STATIONARY";
-	char stationaryUART[] = "Entering STATIONARY mode\r\n";
-	char launchOLED[] = "LAUNCH    ";
-	char launchUART[] = "Entering LAUNCH mode\r\n";
-	char returningOLED[] = "RETURN   ";
-	char returningUART[] = "Entering RETURN mode\r\n";
-
-	char obstacle[] = "Obstacle near";
-	char obstacleUART[] = "Obstacle near.\r\n";
-	char avoided[] = "Obstacle avoided.\r\n";
-	char veer[] = "Veer off course";
-	char veerUART[] = "Veer off course.\r\n";
-	char temp[] = "Temp. too high";
-	char tempUART[] = "Temp. too high.\r\n";
-
-	char clearOLED[] = "               ";
-
-	//to keep track of when entering different modes
-	int enterStationary = 1;
-	int enterLaunch = 1;
-	int enterReturn = 1;
 
 	while (1) {
+    	if (launch == 0 && returning == 0) {
+    	    stationaryMode();
+    	} else if (launch == 1 && returning == 0) {
+    	    launchMode();
+    	} else if (launch == 0 && returning == 1) {
+    	    returnMode();
+    	}
 		oled_acc();
 		lsla();
 		tempSens();
 
-		if (launch == 0 && returning == 0) { //stationary mode
-			led7seg_setChar('F', 0);
-			oled_putString(0, 0, stationaryOLED, OLED_COLOR_WHITE,
-					OLED_COLOR_BLACK);
-			if (enterStationary == 1) {
-				UART_Send(LPC_UART3, (uint8_t *) stationaryUART,
-						strlen(stationaryUART), BLOCKING);
-				enterStationary = 0;
-				enterLaunch = 1;
-				enterReturn = 1;
-			}
-		}
+
 		if (sw3 == 1) { //when mode-toggle pressed
 			if (returning == 0 && launch == 0 && startRed == 0) { //when stationary and no temp warning
 				launch = 1;
@@ -386,34 +422,6 @@ int main(void) {
 			sw3 = 0;
 		}
 
-		if (launch == 1) { //launch mode
-			oled_putString(0, 0, launchOLED, OLED_COLOR_WHITE,
-					OLED_COLOR_BLACK);
-			if (enterLaunch == 1) {
-				UART_Send(LPC_UART3, (uint8_t *) launchUART, strlen(launchUART),
-						BLOCKING);
-				enterStationary = 1;
-				enterReturn = 1;
-			}
-			if (enterLaunch == 1
-					|| getTicks() - launchTicks >= (uint32_t) 10000) {
-				launchTicks = getTicks();
-				sendUART();
-				enterLaunch = 0;
-			}
-		}
-		if (returning == 1) { //returning mode
-			oled_putString(0, 0, returningOLED, OLED_COLOR_WHITE,
-					OLED_COLOR_BLACK);
-			clearWarning(returningOLED, clearOLED);
-			if (enterReturn == 1) {
-				UART_Send(LPC_UART3, (uint8_t *) returningUART,
-						strlen(returningUART), BLOCKING);
-				enterStationary = 1;
-				enterLaunch = 1;
-				enterReturn = 0;
-			}
-		}
 
 		if (light == 1 && returning == 1) {
 			oled_putString(0, 30, (void*) obstacle, OLED_COLOR_WHITE,
@@ -477,10 +485,6 @@ int main(void) {
 			}
 		}
 
-		int btn2 = (GPIO_ReadValue(1) >> 31) & 0x01;
-		if (btn2 == 0) {
-			clearWarning(returningOLED, clearOLED);
-			oled_putString(0, 30, clearOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-		}
+
 	}
 }

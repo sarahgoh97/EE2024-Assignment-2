@@ -35,11 +35,13 @@ int firstTemp = 1;
 int firstLight = 1;
 int currentBlue = 0;
 int currentRed = 0;
+int currentLed = 0;
 uint32_t launchTicks = 0;
 uint32_t lightTicks = 0;
 int counter = 0;
-uint32_t previousTicks = 0;
-uint32_t previousTicks2 = 0;
+uint32_t redTicks = 0;
+uint32_t blueTicks = 0;
+uint32_t bothTicks = 0;
 uint32_t curr = 0;
 
 int launch = 0;
@@ -50,8 +52,9 @@ int enterLaunch = 1;
 int enterReturn = 1;
 
 //For the message for uart
+uint32_t light_value = 0;
+char lightMessage[40] = { };
 char tempValue[15] = { };
-uint32_t lightValue = 0;
 char display_acc[40] = { };
 char message[70] = { };
 char stationaryOLED[] = "STATIONARY";
@@ -68,6 +71,10 @@ char veerUART[] = "Veer off course.\r\n";
 char temp[] = "Temp. too high";
 char tempUART[] = "Temp. too high.\r\n";
 char clearOLED[] = "               ";
+
+int indexUART = 0;
+uint8_t report[6];
+int receive = 0;
 
 void SysTick_Handler(void) {
 	msTicks++;
@@ -164,12 +171,9 @@ void oled_acc() {
 	sprintf(display_acc, "X:%2.2f Y:%2.2f  ", x / 9.8, y / 9.8);
 	oled_putString(0, 10, display_acc, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	//Timer0_Wait(1);
 }
 
 void lsla(void) {
-	uint32_t light_value;
-	lightValue = light_read();
 	light_value = light_read();
 	if (light_value <= 250) {
 		pca9532_setLeds(0x1, 0xFFFF);
@@ -204,7 +208,11 @@ void lsla(void) {
 	} else if (light_value <= 4000) {
 		pca9532_setLeds(0xFFFF, 0xFFFF);
 	}
-
+	if (light_value < 500 || light_value > 3000) {
+		light = 1;
+	} else {
+		light = 0;
+	}
 }
 
 void tempSens(void) {
@@ -215,7 +223,7 @@ void tempSens(void) {
 	my_temp_value = temp_read();
 
 	double floatingTemp = my_temp_value / 10.0;
-	if (floatingTemp > 30.5) {
+	if (floatingTemp > 30) {
 		startRed = 1;
 	}
 	sprintf(tempValue, "Temp: %2.2f", floatingTemp);
@@ -228,11 +236,12 @@ void EINT3_IRQHandler(void) {
 	if ((LPC_GPIOINT ->IO2IntStatF >> 10) & 0x1) {
 		sw3 = 1;
 		LPC_GPIOINT ->IO2IntClr = 1 << 10;
-	} else if ((LPC_GPIOINT ->IO2IntStatF >> 5) & 0x1) {
+	}
+	/*else if ((LPC_GPIOINT ->IO2IntStatF >> 5) & 0x1) {
 		light = 1;
 		light_clearIrqStatus();
 		LPC_GPIOINT ->IO2IntClr = 1 << 5;
-	}
+	}*/
 
 }
 
@@ -246,6 +255,7 @@ void countdown(void) {
 		i++;
 	}
 	if (i < 16) {
+		tempRedLight();
 		launch = 0;
 		led7seg_setChar(count[0], 0);
 	}
@@ -261,8 +271,23 @@ void pinsel_uart3(void) {
 	PINSEL_ConfigPin(&PinCfg);
 }
 
+void UART_IntReceive(void)
+{
+    /* Read the received data */
+    if(UART_Receive(LPC_UART3, &report[indexUART], 1, NONE_BLOCKING) == 1) {
+        if(report[indexUART] == '\r'){
+            receive = 1;
+        }
+        indexUART++;
+        if(indexUART == 5) {
+        	indexUART = 0;
+        }
+    }
+}
+
 void init_uart(void) {
 	UART_CFG_Type uartCfg;
+	UART_FIFO_CFG_Type uartFIFO;
 	uartCfg.Baud_rate = 115200;
 	uartCfg.Databits = UART_DATABIT_8;
 	uartCfg.Parity = UART_PARITY_NONE;
@@ -273,6 +298,15 @@ void init_uart(void) {
 	UART_Init(LPC_UART3, &uartCfg);
 	//enable transmit for uart3
 	UART_TxCmd(LPC_UART3, ENABLE);
+	//enable interrupt and buffer
+	UART_IntConfig(LPC_UART3, UART_INTCFG_RBR, ENABLE);
+	UART_FIFOConfigStructInit(&uartFIFO);
+	UART_FIFOConfig(LPC_UART3, &uartFIFO);
+	UART_SetupCbs(LPC_UART3, 0, (void *)UART_IntReceive);
+}
+
+void UART3_IRQHandler(void) { //from UART_StdIntHandler
+	UART_GenIntHandler(LPC_UART3);
 }
 
 void sendUART(void) {
@@ -281,20 +315,22 @@ void sendUART(void) {
 }
 
 void sendLightUART(void) {
-	sprintf(message, "Obstacle distance: %dm\r\n", lightValue);
-	UART_Send(LPC_UART3, (uint8_t *) message, strlen(message), BLOCKING);
+	sprintf(lightMessage, "Obstacle distance: %d\r\n", light_value);
+	UART_Send(LPC_UART3, (uint8_t *) lightMessage, strlen(lightMessage), BLOCKING);
 }
 
-void clearWarning(char returningOLED[], char clearOLED[]) {
+void clearWarning() {
 	startRed = 0;
 	startBlue = 0;
 	currentBlue = 0;
 	currentRed = 0;
+	currentLed = 0;
 	rgb_setLeds(0);
 	oled_putString(0, 40, clearOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 	oled_putString(0, 50, clearOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 	firstAcc = 1;
 	firstTemp = 1;
+	firstLight = 1;
 }
 
 //MODE_TOGGLE
@@ -324,79 +360,80 @@ void toggleRet(void) {
 
 //WARNING LEDS
 void accBlueLight(void) {
-	if (startBlue == 1) { //acc
 		oled_putString(0, 50, (void*) veer, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-		if (getTicks() - previousTicks2 >= 333) {
+		if (getTicks() - blueTicks >= 333) {
 			if (currentBlue == 0) {
 				currentBlue = 2;
-				rgb_setLeds(currentBlue + currentRed);
+				rgb_setLeds(currentBlue);
 			} else if (currentBlue == 2) {
 				currentBlue = 0;
-				rgb_setLeds(currentBlue + currentRed);
+				rgb_setLeds(currentBlue);
 			}
-			previousTicks2 = getTicks();
+			blueTicks = getTicks();
 		}
 		if (firstAcc == 1) {
 			UART_Send(LPC_UART3, (uint8_t *) veerUART, strlen(veerUART),
 					BLOCKING);
 			firstAcc = 0;
 		}
-	}
 }
 
 void tempRedLight(void) {
-	if (startRed == 1) { //temp
 		oled_putString(0, 40, (void*) temp, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-		if (getTicks() - previousTicks >= 333) {
+		if (getTicks() - redTicks >= 333) {
 			if (currentRed == 0) {
 				currentRed = 1;
-				rgb_setLeds(currentBlue + currentRed);
+				rgb_setLeds(currentRed);
 			} else if (currentRed == 1) {
 				currentRed = 0;
-				rgb_setLeds(currentBlue + currentRed);
+				rgb_setLeds(currentRed);
 			}
-			previousTicks = getTicks();
+			redTicks = getTicks();
 		}
 		if (firstTemp == 1) { //sends only first time past threshold
 			UART_Send(LPC_UART3, (uint8_t *) tempUART, strlen(tempUART),
 					BLOCKING);
 			firstTemp = 0;
 		}
+}
+
+void bothLights() {
+	oled_putString(0, 40, (void*) temp, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	oled_putString(0, 50, (void*) veer, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	if (getTicks() - bothTicks >= 333) {
+		if (currentLed == 1 || currentLed == 0) {
+			currentLed = 2;
+			rgb_setLeds(currentLed);
+		} else if (currentLed == 2) {
+			currentLed = 1;
+			rgb_setLeds(currentLed);
+		}
+		bothTicks = getTicks();
 	}
 }
 
 //CLEAR WARNING
 void clear(void) {
-	clearWarning(returningOLED, clearOLED);
+	clearWarning();
 	oled_putString(0, 30, clearOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 }
 
 //OBSTACLE AVOIDANCE
 void obstacleNear(void) {
 	oled_putString(0, 30, (void*) obstacle, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-	UART_Send(LPC_UART3, (uint8_t *) obstacleUART, strlen(obstacleUART),
-			BLOCKING);
+	if (firstLight == 1) { //sends only first time past threshold
+		UART_Send(LPC_UART3, (uint8_t *) obstacleUART, strlen(obstacleUART), BLOCKING);
+		firstLight = 0;
+	}
 }
+
 void obstacleAvoid(void) {
-	oled_putString(0, 30, (void*) clearOLED, OLED_COLOR_WHITE,
-			OLED_COLOR_BLACK);
-	UART_Send(LPC_UART3, (uint8_t *) avoided, strlen(avoided), BLOCKING);
+	oled_putString(0, 30, (void*) clearOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	if (firstLight == 0) {
+		UART_Send(LPC_UART3, (uint8_t *) avoided, strlen(avoided), BLOCKING);
+		firstLight = 1;
+	}
 }
-
-//TELEMETRY
-void rptLaunch(void) {
-	uint8_t data[6] = {};
-	UART_Receive(LPC_UART3, &data, 6, NONE_BLOCKING);
-	if (strcmp(data, "RPT \r") == 0)
-		sendUART();
-}
-
-void rptReturn(void) {
-	uint8_t data = 0;
-	UART_Receive(LPC_UART3, &data, 6, NONE_BLOCKING);
-	sendLightUART();
-}
-
 
 void initAll(void) {
 	init_i2c();
@@ -409,6 +446,7 @@ void initAll(void) {
 	//light sensor with LED array
 	light_init();
 	light_enable();
+	light_setRange(LIGHT_RANGE_4000);
 	pca9532_init();
 	led7seg_init();
 
@@ -417,7 +455,7 @@ void initAll(void) {
 	oled_init();
 
 	//uart
-	uart2_init(115200, CHANNEL_A);
+	//uart2_init(115200, CHANNEL_A);
 	init_uart();
 
 	oled_clearScreen(OLED_COLOR_BLACK);
@@ -428,31 +466,23 @@ void initAll(void) {
 	NVIC_SetPriorityGrouping(5);
 	NVIC_SetPriority(SysTick_IRQn, 0x0000);
 	NVIC_SetPriority(EINT3_IRQn, 0x0040);
-	//NVIC_SetPriority(UART3_IRQn, 0x0080);
+	NVIC_SetPriority(UART3_IRQn, 0x0080);
+
+	//UART interrupt
+
+	NVIC_ClearPendingIRQ(UART3_IRQn);
+	NVIC_EnableIRQ(UART3_IRQn);
 
 	NVIC_ClearPendingIRQ(EINT3_IRQn);
 	// Enable EINT3 interrupt
 	NVIC_EnableIRQ(EINT3_IRQn);
 
-	//NVIC_ClearPendingIRQ(UART3_IRQn);
-	//NVIC_EnableIRQ(UART3_IRQn);
-	//UART_FIFOConfig();
-	//UART_IntConfig(LPC_UART3, );
-
-	//UART interrupt
-
-	//light interrupt
-	LPC_GPIOINT ->IO2IntEnF |= (1 << 5);
-	light_setHiThreshold(3000);
-	light_setLoThreshold(500);
-	light_clearIrqStatus();
-	light_setRange(LIGHT_RANGE_4000);
 	rgb_setLeds(0);
 
 }
 
 void stationaryMode(void) {
-	if (enterStationary == 1) {
+	if (enterStationary == 1) { //first time entering stationary mode
 		oled_clearScreen(OLED_COLOR_BLACK);
 		led7seg_setChar('F', 0);
 		oled_putString(0, 0, stationaryOLED, OLED_COLOR_WHITE,
@@ -464,8 +494,10 @@ void stationaryMode(void) {
 		enterReturn = 1;
 	}
 	tempSens();
-	tempRedLight();
-	if (sw3 == 1 && startRed == 0) {
+	if (startRed == 1) {
+		tempRedLight();
+	}
+	if (sw3 == 1) {
 		toggleSta();
 	}
 	int btn2 = (GPIO_ReadValue(1) >> 31) & 0x01;
@@ -475,11 +507,11 @@ void stationaryMode(void) {
 }
 
 void launchMode(void) {
-	tempSens();
-	oled_acc();
 	if (enterLaunch == 1) {
 		oled_clearScreen(OLED_COLOR_BLACK);
 		oled_putString(0, 0, launchOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+		tempSens();
+		oled_acc();
 		UART_Send(LPC_UART3, (uint8_t *) launchUART, strlen(launchUART),
 				BLOCKING);
 		enterStationary = 1;
@@ -491,9 +523,19 @@ void launchMode(void) {
 		sendUART();
 		enterLaunch = 0;
 	}
-	rptLaunch();
-	tempRedLight();
-	accBlueLight();
+	if (receive == 1) {
+		sendUART();
+		receive = 0;
+	}
+	tempSens();
+	oled_acc();
+	if (startRed == 1 && startBlue == 0) { //only temp warning
+		tempRedLight();
+	} else if (startRed == 0 && startBlue == 1) { //only acc warning
+		accBlueLight();
+	} else if (startRed == 1 && startBlue == 1) { //both warnings
+		bothLights();
+	}
 	if (sw3 == 1) {
 		toggleLau();
 	}
@@ -504,11 +546,11 @@ void launchMode(void) {
 }
 
 void returnMode(void) {
-	lsla();
 	if (enterReturn == 1) {
 		oled_clearScreen(OLED_COLOR_BLACK);
 		oled_putString(0, 0, returningOLED, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-		clear();
+		clearWarning();
+		lsla();
 		UART_Send(LPC_UART3, (uint8_t *) returningUART, strlen(returningUART),
 				BLOCKING);
 		enterStationary = 1;
@@ -519,22 +561,24 @@ void returnMode(void) {
 		sendLightUART();
 		enterReturn = 0;
 	}
-	rptReturn();
+	//rptReturn();
 	if (sw3 == 1) {
 		toggleRet();
 	}
+
 	int btn2 = (GPIO_ReadValue(1) >> 31) & 0x01;
 	if (btn2 == 0) {
 		clear();
 	}
+	lsla();
 	if (light == 1) {
 		obstacleNear();
-		//firstLight = 0;
-		light = 0;
 	} else {
-	//else if (light == 0 && firstLight == 0) {
 		obstacleAvoid();
-		//firstLight = 1;
+	}
+	if (receive == 1) {
+		sendLightUART();
+		receive = 0;
 	}
 }
 
